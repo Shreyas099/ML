@@ -46,7 +46,7 @@ class NOAADataFetcher:
             logger.error(f"Error getting station ID: {e}")
             return None
     
-    def get_historical_observations(self, station_id: str, days: int = 730) -> tuple[pd.DataFrame, dict]:
+    def get_historical_observations(self, station_id: str, days: int = 30) -> tuple[pd.DataFrame, dict]:
         """
         Fetch historical observations from a station
         Note: NOAA API has limited historical data, so we'll use current observations
@@ -199,7 +199,7 @@ class NOAADataFetcher:
         from geopy.geocoders import Nominatim
 
         try:
-            geolocator = Nominatim(user_agent="weather_app")
+            geolocator = Nominatim(user_agent="weather_app", timeout=10)
             location = geolocator.geocode(location_name)
             if location:
                 return (location.latitude, location.longitude)

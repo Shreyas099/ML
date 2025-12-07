@@ -5,12 +5,17 @@ Hybrid SARIMA-LSTM Model for 7-Day Weather Predictions
 import streamlit as st
 import pandas as pd
 import numpy as np
+import logging
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import time
 import warnings
 warnings.filterwarnings('ignore')
+
+# Setup logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # Constants
 FORECAST_HOURS = 168  # 7 days * 24 hours
@@ -32,7 +37,7 @@ def get_models():
             _HybridSARIMALSTM = None  # Will be loaded on demand
         except Exception as e:
             # Don't use st.error here - Streamlit might not be initialized yet
-            print(f"Error loading data fetcher: {e}")
+            logger.error(f"Error loading data fetcher: {e}")
             return None, None
         _models_loaded = True
     
@@ -47,7 +52,7 @@ def get_hybrid_model():
             _HybridSARIMALSTM = HybridSARIMALSTM
         except Exception as e:
             # Error will be shown in UI when this is called
-            print(f"Error loading hybrid model: {e}")
+            logger.error(f"Error loading hybrid model: {e}")
             return None
     return _HybridSARIMALSTM
 
@@ -206,7 +211,7 @@ def main():
             status_text.text("Fetching historical weather data...")
             progress_bar.progress(20)
 
-            historical_data, data_metadata = fetcher.get_historical_observations(station_id, days=730)
+            historical_data, data_metadata = fetcher.get_historical_observations(station_id, days=30)
 
             if historical_data.empty:
                 st.error("❌ Failed to fetch data. Please try again.")
