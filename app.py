@@ -211,7 +211,7 @@ def main():
             status_text.text("Fetching historical weather data...")
             progress_bar.progress(20)
 
-            historical_data, data_metadata = fetcher.get_historical_observations(station_id, days=730)
+            historical_data, data_metadata = fetcher.get_historical_observations(station_id, days=30)
 
             if historical_data.empty:
                 st.error("❌ Failed to fetch data. Please try again.")
