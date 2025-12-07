@@ -205,16 +205,28 @@ def main():
             
             status_text.text("Fetching historical weather data...")
             progress_bar.progress(20)
-            
-            historical_data = fetcher.get_historical_observations(station_id, days=730)
-            
+
+            historical_data, data_metadata = fetcher.get_historical_observations(station_id, days=730)
+
             if historical_data.empty:
                 st.error("❌ Failed to fetch data. Please try again.")
                 return
+
+            # Display data source information
+            if data_metadata['quality'] == 'synthetic':
+                st.warning(f"⚠️ **Using Synthetic Data**: {data_metadata['source']}")
+                st.info("📊 Synthetic data is used for demonstration only. Results may not reflect real weather patterns.")
+            elif data_metadata['quality'] == 'insufficient':
+                st.warning(f"⚠️ **Limited Data**: Only {data_metadata['data_points']} data points covering {data_metadata['coverage_days']} days")
+                st.info("For best results, at least 1000 data points covering 30+ days are recommended.")
+            elif data_metadata['quality'] == 'limited':
+                st.info(f"📡 **Data Source**: {data_metadata['source']} - {data_metadata['data_points']} points, {data_metadata['coverage_days']} days coverage")
+            else:
+                st.success(f"✅ **Good Data Quality**: {data_metadata['source']} - {data_metadata['data_points']} points, {data_metadata['coverage_days']} days coverage")
             
             progress_bar.progress(40)
             status_text.text("Preparing data for training...")
-            
+
             # Prepare training data
             # Use temperature as primary target
             if 'temperature' in historical_data.columns:
@@ -222,6 +234,13 @@ def main():
             else:
                 st.error("Temperature data not available")
                 return
+
+            # Validate data length
+            if len(temp_data) < 100:
+                st.error(f"❌ Insufficient data: Only {len(temp_data)} temperature readings available. Minimum 100 required.")
+                return
+            elif len(temp_data) < 200:
+                st.warning(f"⚠️ Limited data ({len(temp_data)} points). Results may be inaccurate. Recommended: 1000+ points.")
             
             # Prepare features
             feature_cols = ['dewpoint', 'barometricPressure', 'windSpeed', 'visibility']
@@ -264,16 +283,22 @@ def main():
             
             progress_bar.progress(80)
             status_text.text("Generating 7-day forecast...")
-            
-            # Generate 7-day forecast (168 hours)
+
+            # Generate 7-day forecast (168 hours) with confidence intervals
             start_date = datetime.now()
             # Note: future_features would need to be forecasted separately
             # For now, pass None as we don't have future feature values
-            forecast = model.predict(FORECAST_HOURS, pd.Timestamp(start_date), None)
-            
+            forecast, forecast_lower, forecast_upper = model.predict(
+                FORECAST_HOURS, pd.Timestamp(start_date), None, return_confidence=True
+            )
+
             # Store in session state
             st.session_state.models[location_key] = model
-            st.session_state.forecasts[location_key] = forecast
+            st.session_state.forecasts[location_key] = {
+                'forecast': forecast,
+                'lower': forecast_lower,
+                'upper': forecast_upper
+            }
             st.session_state.data_cache[location_key] = {
                 'historical': temp_data,
                 'features': features_df,
@@ -288,15 +313,18 @@ def main():
     
     # Display results
     if location_key in st.session_state.forecasts:
-        forecast = st.session_state.forecasts[location_key]
+        forecast_data = st.session_state.forecasts[location_key]
+        forecast = forecast_data['forecast']
+        forecast_lower = forecast_data['lower']
+        forecast_upper = forecast_data['upper']
         historical = st.session_state.data_cache[location_key]['historical']
         location_display = st.session_state.data_cache[location_key]['location']
-        
+
         st.success(f"✅ Forecast available for {location_display}")
-        
+
         # Metrics row
         col1, col2, col3, col4 = st.columns(4)
-        
+
         with col1:
             st.metric("Current Temp", f"{historical.iloc[-1]:.1f}°C" if len(historical) > 0 else "N/A")
         with col2:
@@ -345,28 +373,25 @@ def main():
             ),
             row=1, col=1
         )
-        
-        # Add confidence interval (simplified)
-        forecast_upper = forecast + forecast.std()
-        forecast_lower = forecast - forecast.std()
-        
+
+        # Add proper confidence intervals (95%)
         fig.add_trace(
             go.Scatter(
                 x=forecast.index,
                 y=forecast_upper.values,
-                name="Upper Bound",
+                name="Upper 95% CI",
                 line=dict(width=0),
                 mode="lines",
                 showlegend=False
             ),
             row=1, col=1
         )
-        
+
         fig.add_trace(
             go.Scatter(
                 x=forecast.index,
                 y=forecast_lower.values,
-                name="Confidence Interval",
+                name="95% Confidence Interval",
                 fill="tonexty",
                 fillcolor="rgba(246, 147, 251, 0.2)",
                 line=dict(width=0),
