@@ -1,6 +1,6 @@
 """
-NOAA Weather API Data Fetcher
-Fetches historical and current weather data from NOAA API
+Weather API Data Fetcher
+Fetches historical and current weather data from Open-Meteo API
 """
 import requests
 import pandas as pd
@@ -13,44 +13,29 @@ import time
 logger = logging.getLogger(__name__)
 
 
-class NOAADataFetcher:
-    """Fetches weather data from NOAA Weather API"""
-    
-    BASE_URL = "https://api.weather.gov"
+class WeatherDataFetcher:
+    """Fetches weather data from Open-Meteo API (free, no API key required)"""
+
+    OPENMETEO_URL = "https://archive-api.open-meteo.com/v1/archive"
+    GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
     
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'WeatherForecastApp/1.0 (weather-forecast-app)',
+            'User-Agent': 'WeatherForecastApp/2.0',
             'Accept': 'application/json'
         })
     
-    def get_station_id(self, lat: float, lon: float) -> Optional[str]:
-        """Get the nearest weather station ID for given coordinates"""
-        try:
-            url = f"{self.BASE_URL}/points/{lat},{lon}"
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Get observation stations
-            stations_url = data['properties']['observationStations']
-            stations_response = self.session.get(stations_url, timeout=10)
-            stations_response.raise_for_status()
-            stations_data = stations_response.json()
-            
-            if stations_data['features']:
-                return stations_data['features'][0]['properties']['stationIdentifier']
-            return None
-        except Exception as e:
-            logger.error(f"Error getting station ID: {e}")
-            return None
-    
-    def get_historical_observations(self, station_id: str, days: int = 30) -> tuple[pd.DataFrame, dict]:
+    def get_historical_observations(self, lat: float, lon: float, days: int = 365) -> tuple[pd.DataFrame, dict]:
         """
-        Fetch historical observations from a station
-        Note: NOAA API has limited historical data, so we'll use current observations
-        and simulate historical data structure for training
+        Fetch historical weather observations from Open-Meteo
+        Open-Meteo provides extensive free historical data with no API key required
+
+        Parameters:
+        -----------
+        lat : float - Latitude
+        lon : float - Longitude
+        days : int - Number of days of historical data (default 365, max ~40 years)
 
         Returns:
         --------
@@ -61,56 +46,48 @@ class NOAADataFetcher:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
 
-        observations = []
         metadata = {
             'source': 'unknown',
             'data_points': 0,
             'coverage_days': 0,
             'quality': 'unknown',
-            'station_id': station_id
+            'location': f'{lat:.4f}, {lon:.4f}'
         }
 
-        # NOAA API doesn't provide extensive historical data via free API
-        # We'll fetch recent observations and use them for training
-        # In production, you might want to use a different data source for historical data
-
         try:
-            # Get recent observations (last 7 days typically available)
-            url = f"{self.BASE_URL}/stations/{station_id}/observations"
+            # Open-Meteo Historical Weather API
             params = {
-                'limit': 500,
-                'start': start_date.isoformat(),
-                'end': end_date.isoformat()
+                'latitude': lat,
+                'longitude': lon,
+                'start_date': start_date.strftime('%Y-%m-%d'),
+                'end_date': end_date.strftime('%Y-%m-%d'),
+                'hourly': 'temperature_2m,relative_humidity_2m,dew_point_2m,pressure_msl,wind_speed_10m,wind_direction_10m',
+                'timezone': 'auto'
             }
 
-            response = self.session.get(url, params=params, timeout=10)
+            response = self.session.get(self.OPENMETEO_URL, params=params, timeout=30)
             response.raise_for_status()
             data = response.json()
 
-            for feature in data.get('features', []):
-                props = feature['properties']
-                timestamp = props.get('timestamp')
-                if timestamp:
-                    obs = {
-                        'timestamp': pd.to_datetime(timestamp),
-                        'temperature': props.get('temperature', {}).get('value'),
-                        'dewpoint': props.get('dewpoint', {}).get('value'),
-                        'windSpeed': props.get('windSpeed', {}).get('value'),
-                        'windDirection': props.get('windDirection', {}).get('value'),
-                        'barometricPressure': props.get('barometricPressure', {}).get('value'),
-                        'relativeHumidity': props.get('relativeHumidity', {}).get('value'),
-                        'visibility': props.get('visibility', {}).get('value'),
-                        'precipitationLastHour': props.get('precipitationLastHour', {}).get('value')
-                    }
-                    observations.append(obs)
+            # Parse hourly data
+            hourly = data.get('hourly', {})
+            times = pd.to_datetime(hourly.get('time', []))
 
-            df = pd.DataFrame(observations)
+            df = pd.DataFrame({
+                'timestamp': times,
+                'temperature': hourly.get('temperature_2m', []),
+                'dewpoint': hourly.get('dew_point_2m', []),
+                'barometricPressure': hourly.get('pressure_msl', []),
+                'windSpeed': hourly.get('wind_speed_10m', []),
+                'windDirection': hourly.get('wind_direction_10m', []),
+                'relativeHumidity': hourly.get('relative_humidity_2m', [])
+            })
+
             if not df.empty:
-                df = df.sort_values('timestamp')
                 df = df.set_index('timestamp')
 
                 # Update metadata for real data
-                metadata['source'] = 'NOAA API (real data)'
+                metadata['source'] = 'Open-Meteo API (real data)'
                 metadata['data_points'] = len(df)
                 coverage = (df.index[-1] - df.index[0]).total_seconds() / 86400
                 metadata['coverage_days'] = round(coverage, 1)
@@ -123,18 +100,19 @@ class NOAADataFetcher:
                 else:
                     metadata['quality'] = 'insufficient'
 
+                logger.info(f"Fetched {metadata['data_points']} data points from Open-Meteo ({metadata['coverage_days']} days)")
                 return df, metadata
             else:
-                # Generate synthetic data for demonstration if no data available
+                # Fallback to synthetic data
                 df = self._generate_synthetic_data(start_date, end_date)
-                metadata['source'] = 'Synthetic (NOAA unavailable)'
+                metadata['source'] = 'Synthetic (Open-Meteo returned no data)'
                 metadata['data_points'] = len(df)
                 metadata['coverage_days'] = days
                 metadata['quality'] = 'synthetic'
                 return df, metadata
 
         except Exception as e:
-            logger.error(f"Error fetching observations: {e}")
+            logger.error(f"Error fetching from Open-Meteo: {e}")
             # Return synthetic data as fallback
             df = self._generate_synthetic_data(start_date, end_date)
             metadata['source'] = f'Synthetic (Error: {str(e)[:50]})'
@@ -177,32 +155,50 @@ class NOAADataFetcher:
         return df
     
     def get_current_forecast(self, lat: float, lon: float) -> Dict:
-        """Get current forecast for a location"""
+        """Get current forecast for a location using Open-Meteo"""
         try:
-            url = f"{self.BASE_URL}/points/{lat},{lon}"
-            response = self.session.get(url, timeout=10)
+            params = {
+                'latitude': lat,
+                'longitude': lon,
+                'hourly': 'temperature_2m,precipitation_probability,weather_code',
+                'forecast_days': 7,
+                'timezone': 'auto'
+            }
+
+            response = self.session.get('https://api.open-meteo.com/v1/forecast', params=params, timeout=10)
             response.raise_for_status()
-            data = response.json()
-            
-            forecast_url = data['properties']['forecast']
-            forecast_response = self.session.get(forecast_url, timeout=10)
-            forecast_response.raise_for_status()
-            forecast_data = forecast_response.json()
-            
+            forecast_data = response.json()
+
             return forecast_data
         except Exception as e:
             logger.error(f"Error getting forecast: {e}")
             return {}
 
     def get_location_data(self, location_name: str) -> Optional[Tuple[float, float]]:
-        """Get coordinates for a location name using geocoding"""
-        from geopy.geocoders import Nominatim
-
+        """Get coordinates for a location name using Open-Meteo Geocoding API"""
         try:
-            geolocator = Nominatim(user_agent="weather_app", timeout=10)
-            location = geolocator.geocode(location_name)
-            if location:
-                return (location.latitude, location.longitude)
+            params = {
+                'name': location_name,
+                'count': 1,
+                'language': 'en',
+                'format': 'json'
+            }
+
+            response = self.session.get(self.GEOCODING_URL, params=params, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            results = data.get('results', [])
+            if results:
+                location = results[0]
+                lat = location.get('latitude')
+                lon = location.get('longitude')
+                name = location.get('name', location_name)
+                logger.info(f"Found location: {name} at ({lat}, {lon})")
+                return (lat, lon)
+            else:
+                logger.warning(f"No location found for: {location_name}")
+                return None
         except Exception as e:
             logger.error(f"Error geocoding location: {e}")
-        return None
+            return None
