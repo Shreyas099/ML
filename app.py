@@ -28,11 +28,11 @@ _HybridSARIMALSTM = None
 def get_models():
     """Lazy load models to speed up app startup - only when actually needed"""
     global _models_loaded, _NOAADataFetcher, _HybridSARIMALSTM
-    
+
     if not _models_loaded:
         try:
-            from noaa_api import NOAADataFetcher
-            _NOAADataFetcher = NOAADataFetcher
+            from noaa_api import WeatherDataFetcher
+            _NOAADataFetcher = WeatherDataFetcher  # Keep variable name for compatibility
             # Don't import hybrid_model yet - it will import TensorFlow
             _HybridSARIMALSTM = None  # Will be loaded on demand
         except Exception as e:
@@ -40,7 +40,7 @@ def get_models():
             logger.error(f"Error loading data fetcher: {e}")
             return None, None
         _models_loaded = True
-    
+
     return _NOAADataFetcher, _HybridSARIMALSTM
 
 def get_hybrid_model():
@@ -197,21 +197,16 @@ def main():
             if fetcher is None:
                 st.error("Unable to initialize data fetcher")
                 st.stop()
-            
-            # Get station ID
-            station_id = fetcher.get_station_id(lat, lon)
-            if not station_id:
-                st.warning("⚠️ Weather station not found. Using synthetic data for demonstration.")
-                station_id = "SYNTHETIC"
-            
-            # Fetch historical data
+
+            # Fetch historical data directly with coordinates (Open-Meteo doesn't need station IDs)
             progress_bar = st.progress(0)
             status_text = st.empty()
-            
-            status_text.text("Fetching historical weather data...")
+
+            status_text.text("Fetching historical weather data from Open-Meteo...")
             progress_bar.progress(20)
 
-            historical_data, data_metadata = fetcher.get_historical_observations(station_id, days=30)
+            # Request 365 days of data (Open-Meteo can provide this!)
+            historical_data, data_metadata = fetcher.get_historical_observations(lat, lon, days=365)
 
             if historical_data.empty:
                 st.error("❌ Failed to fetch data. Please try again.")
