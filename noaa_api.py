@@ -4,9 +4,13 @@ Fetches historical and current weather data from NOAA API
 """
 import requests
 import pandas as pd
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import time
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 
 class NOAADataFetcher:
@@ -39,24 +43,37 @@ class NOAADataFetcher:
                 return stations_data['features'][0]['properties']['stationIdentifier']
             return None
         except Exception as e:
-            print(f"Error getting station ID: {e}")
+            logger.error(f"Error getting station ID: {e}")
             return None
     
-    def get_historical_observations(self, station_id: str, days: int = 730) -> pd.DataFrame:
+    def get_historical_observations(self, station_id: str, days: int = 730) -> tuple[pd.DataFrame, dict]:
         """
         Fetch historical observations from a station
         Note: NOAA API has limited historical data, so we'll use current observations
         and simulate historical data structure for training
+
+        Returns:
+        --------
+        tuple: (DataFrame, metadata_dict)
+            - DataFrame with weather observations
+            - metadata_dict with keys: 'source', 'data_points', 'coverage_days', 'quality'
         """
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
-        
+
         observations = []
-        
+        metadata = {
+            'source': 'unknown',
+            'data_points': 0,
+            'coverage_days': 0,
+            'quality': 'unknown',
+            'station_id': station_id
+        }
+
         # NOAA API doesn't provide extensive historical data via free API
         # We'll fetch recent observations and use them for training
         # In production, you might want to use a different data source for historical data
-        
+
         try:
             # Get recent observations (last 7 days typically available)
             url = f"{self.BASE_URL}/stations/{station_id}/observations"
@@ -65,11 +82,11 @@ class NOAADataFetcher:
                 'start': start_date.isoformat(),
                 'end': end_date.isoformat()
             }
-            
+
             response = self.session.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
-            
+
             for feature in data.get('features', []):
                 props = feature['properties']
                 timestamp = props.get('timestamp')
@@ -86,22 +103,45 @@ class NOAADataFetcher:
                         'precipitationLastHour': props.get('precipitationLastHour', {}).get('value')
                     }
                     observations.append(obs)
-            
+
             df = pd.DataFrame(observations)
             if not df.empty:
                 df = df.sort_values('timestamp')
                 df = df.set_index('timestamp')
-                # Convert from Celsius to match paper (if needed)
-                # NOAA API returns in Celsius
-                return df
+
+                # Update metadata for real data
+                metadata['source'] = 'NOAA API (real data)'
+                metadata['data_points'] = len(df)
+                coverage = (df.index[-1] - df.index[0]).total_seconds() / 86400
+                metadata['coverage_days'] = round(coverage, 1)
+
+                # Assess data quality
+                if metadata['data_points'] >= 1000 and coverage >= 30:
+                    metadata['quality'] = 'good'
+                elif metadata['data_points'] >= 200:
+                    metadata['quality'] = 'limited'
+                else:
+                    metadata['quality'] = 'insufficient'
+
+                return df, metadata
             else:
                 # Generate synthetic data for demonstration if no data available
-                return self._generate_synthetic_data(start_date, end_date)
-                
+                df = self._generate_synthetic_data(start_date, end_date)
+                metadata['source'] = 'Synthetic (NOAA unavailable)'
+                metadata['data_points'] = len(df)
+                metadata['coverage_days'] = days
+                metadata['quality'] = 'synthetic'
+                return df, metadata
+
         except Exception as e:
-            print(f"Error fetching observations: {e}")
+            logger.error(f"Error fetching observations: {e}")
             # Return synthetic data as fallback
-            return self._generate_synthetic_data(start_date, end_date)
+            df = self._generate_synthetic_data(start_date, end_date)
+            metadata['source'] = f'Synthetic (Error: {str(e)[:50]})'
+            metadata['data_points'] = len(df)
+            metadata['coverage_days'] = days
+            metadata['quality'] = 'synthetic'
+            return df, metadata
     
     def _generate_synthetic_data(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """Generate synthetic weather data for demonstration when API data is limited"""
@@ -151,18 +191,18 @@ class NOAADataFetcher:
             
             return forecast_data
         except Exception as e:
-            print(f"Error getting forecast: {e}")
+            logger.error(f"Error getting forecast: {e}")
             return {}
-    
+
     def get_location_data(self, location_name: str) -> Optional[Tuple[float, float]]:
         """Get coordinates for a location name using geocoding"""
         from geopy.geocoders import Nominatim
-        
+
         try:
             geolocator = Nominatim(user_agent="weather_app")
             location = geolocator.geocode(location_name)
             if location:
                 return (location.latitude, location.longitude)
         except Exception as e:
-            print(f"Error geocoding location: {e}")
+            logger.error(f"Error geocoding location: {e}")
         return None
