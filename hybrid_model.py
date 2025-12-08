@@ -1,6 +1,5 @@
 """
-Hybrid SARIMA-LSTM Model (Clean Implementation)
-Combines statistical and deep learning approaches for superior forecasting
+Hybrid SARIMA-LSTM Model (Improvements Applied)
 """
 import pandas as pd
 import numpy as np
@@ -11,252 +10,108 @@ from lstm_model import LSTMModel
 
 logger = logging.getLogger(__name__)
 
-
 class HybridSARIMALSTM:
-    """
-    Hybrid model combining SARIMA and LSTM
-
-    Two-stage approach:
-    1. SARIMA captures linear trends and seasonal patterns
-    2. LSTM captures non-linear patterns in SARIMA residuals
-    3. Final forecast = SARIMA forecast + LSTM residual forecast
-    """
-
     def __init__(self,
                  sarima_order: Tuple[int, int, int] = (1, 1, 1),
                  sarima_seasonal_order: Tuple[int, int, int, int] = (1, 1, 1, 24),
                  lstm_sequence_length: int = 24,
                  lstm_units: Tuple[int, int] = (32, 16)):
-        """
-        Initialize hybrid model
-
-        Parameters:
-        -----------
-        sarima_order : tuple - ARIMA order (p,d,q)
-        sarima_seasonal_order : tuple - Seasonal order (P,D,Q,s)
-        lstm_sequence_length : int - LSTM lookback window
-        lstm_units : tuple - LSTM layer sizes
-        """
-        self.sarima = SARIMAModel(
-            order=sarima_order,
-            seasonal_order=sarima_seasonal_order
-        )
-        self.lstm = LSTMModel(
-            sequence_length=lstm_sequence_length,
-            lstm_units=lstm_units
-        )
+        self.sarima = SARIMAModel(order=sarima_order, seasonal_order=sarima_seasonal_order)
+        self.lstm = LSTMModel(sequence_length=lstm_sequence_length, lstm_units=lstm_units)
         self.is_fitted = False
 
     def fit(self, data: pd.Series, features: Optional[pd.DataFrame] = None,
             lstm_epochs: int = 30, lstm_batch_size: int = 32):
-        """
-        Fit hybrid model
-
-        Parameters:
-        -----------
-        data : pd.Series - Time series data with datetime index
-        features : pd.DataFrame - Additional features (optional, not used in simple version)
-        lstm_epochs : int - LSTM training epochs
-        lstm_batch_size : int - LSTM batch size
-        """
+        
         if not isinstance(data, pd.Series):
             raise TypeError("data must be a pandas Series")
 
-        if len(data) < 100:
-            raise ValueError(f"Insufficient data: need at least 100 points, got {len(data)}")
-
         logger.info(f"Training hybrid model on {len(data)} data points")
 
-        # Stage 1: Fit SARIMA to capture linear/seasonal patterns
+        # Stage 1: SARIMA
         logger.info("Stage 1: Fitting SARIMA model...")
         self.sarima.fit(data)
-
-        # Get SARIMA residuals
         residuals = self.sarima.get_residuals()
-        logger.info(f"SARIMA residuals computed: {len(residuals)} points")
 
-        # Stage 2: Fit LSTM to residuals to capture non-linear patterns
+        # Stage 2: LSTM with Features
         logger.info("Stage 2: Fitting LSTM to residuals...")
         try:
+            # Pass features explicitly here
             self.lstm.fit(
                 residuals,
-                features=None,  # Simplified - not using features
+                features=features,  # ENABLED MULTIVARIATE SUPPORT
                 epochs=lstm_epochs,
                 batch_size=lstm_batch_size
             )
         except Exception as e:
             logger.warning(f"LSTM training failed: {e}. Using SARIMA only.")
-            # If LSTM fails, we can still use SARIMA predictions
             self.lstm.is_fitted = False
 
         self.is_fitted = True
-        logger.info("Hybrid model training complete")
 
     def predict(self, steps: int, start_date: pd.Timestamp,
                 future_features: Optional[pd.DataFrame] = None,
                 return_confidence: bool = False):
-        """
-        Generate forecast
-
-        Parameters:
-        -----------
-        steps : int - Number of time steps to forecast
-        start_date : pd.Timestamp - Start datetime for forecast
-        future_features : pd.DataFrame - Future features (optional, not used)
-        return_confidence : bool - Whether to return confidence intervals
-
-        Returns:
-        --------
-        If return_confidence=False: forecast (pd.Series)
-        If return_confidence=True: (forecast, lower_bound, upper_bound)
-        """
+        
         if not self.is_fitted:
-            raise ValueError("Model not fitted. Call fit() first.")
+            raise ValueError("Model not fitted")
 
-        logger.info(f"Generating {steps}-step forecast")
-
-        # Get SARIMA forecast with confidence intervals
-        if return_confidence:
-            sarima_pred, sarima_lower, sarima_upper = self.sarima.predict(
-                steps, start_date, return_confidence=True
-            )
-        else:
-            sarima_pred = self.sarima.predict(steps, start_date, return_confidence=False)
-
-        # If LSTM is fitted, add residual predictions
-        if self.lstm.is_fitted:
-            try:
-                # Get residuals for prediction
-                residuals = self.sarima.get_residuals()
-
-                if return_confidence:
-                    # Get LSTM predictions with uncertainty
-                    lstm_pred, lstm_std = self.lstm.predict_residuals(
-                        residuals,
-                        steps,
-                        return_std=True
-                    )
-
-                    # Combine SARIMA + LSTM
-                    hybrid_pred = sarima_pred + lstm_pred.values
-                    hybrid_pred.index = sarima_pred.index
-
-                    # Combine uncertainties (SARIMA CI + LSTM std)
-                    sarima_std = (sarima_upper - sarima_lower) / (2 * 1.96)  # Convert CI to std
-                    combined_std = np.sqrt(sarima_std**2 + lstm_std**2)
-
-                    # Create combined confidence intervals
-                    hybrid_lower = hybrid_pred - 1.96 * combined_std
-                    hybrid_upper = hybrid_pred + 1.96 * combined_std
-
-                    logger.info("Hybrid forecast with confidence intervals generated")
-                    return hybrid_pred, hybrid_lower, hybrid_upper
-                else:
-                    # Simple prediction without confidence
-                    lstm_pred = self.lstm.predict_residuals(residuals, steps, return_std=False)
-                    hybrid_pred = sarima_pred + lstm_pred.values
-                    hybrid_pred.index = sarima_pred.index
-
-                    logger.info("Hybrid forecast generated")
-                    return hybrid_pred
-
-            except Exception as e:
-                logger.warning(f"LSTM prediction failed: {e}. Using SARIMA only.")
-                # Fall back to SARIMA-only predictions
-                if return_confidence:
-                    return sarima_pred, sarima_lower, sarima_upper
-                else:
-                    return sarima_pred
-        else:
-            # LSTM not fitted, use SARIMA only
-            logger.info("LSTM not available, using SARIMA predictions only")
-            if return_confidence:
-                return sarima_pred, sarima_lower, sarima_upper
-            else:
-                return sarima_pred
-
-    def get_component_predictions(self, steps: int, start_date: pd.Timestamp):
-        """
-        Get individual model predictions for comparison
-
-        Parameters:
-        -----------
-        steps : int - Number of steps to forecast
-        start_date : pd.Timestamp - Start datetime
-
-        Returns:
-        --------
-        dict with keys:
-            'sarima': SARIMA predictions
-            'lstm_residuals': LSTM residual predictions (if available)
-            'hybrid': Combined predictions
-        """
-        if not self.is_fitted:
-            raise ValueError("Model not fitted. Call fit() first.")
-
-        # SARIMA predictions
-        sarima_pred = self.sarima.predict(steps, start_date, return_confidence=False)
-
-        result = {'sarima': sarima_pred}
-
-        # LSTM residual predictions if available
+        # SARIMA Forecast
+        sarima_res = self.sarima.predict(steps, start_date, return_confidence=True)
+        # Unpack tuple safely
+        sarima_pred, sarima_lower, sarima_upper = sarima_res
+        
+        # LSTM Residual Forecast
         if self.lstm.is_fitted:
             try:
                 residuals = self.sarima.get_residuals()
-                lstm_pred = self.lstm.predict_residuals(residuals, steps, return_std=False)
-                result['lstm_residuals'] = lstm_pred
+                
+                # Get LSTM prediction (with Monte Carlo uncertainty if requested)
+                lstm_res = self.lstm.predict_residuals(
+                    residuals, 
+                    steps, 
+                    future_features=future_features, 
+                    return_std=return_confidence
+                )
+                
+                if return_confidence:
+                    lstm_pred, lstm_std = lstm_res
+                else:
+                    lstm_pred, lstm_std = lstm_res, 0
 
-                # Hybrid = SARIMA + LSTM residuals
+                # Combine
                 hybrid_pred = sarima_pred + lstm_pred.values
                 hybrid_pred.index = sarima_pred.index
-                result['hybrid'] = hybrid_pred
-            except Exception as e:
-                logger.warning(f"LSTM prediction failed: {e}")
-                result['hybrid'] = sarima_pred
-        else:
-            result['hybrid'] = sarima_pred
 
-        return result
+                if return_confidence:
+                    # Combine uncertainties (RMSE propagation)
+                    sarima_std = (sarima_upper - sarima_lower) / 3.92 # Approx 95% CI to std
+                    total_std = np.sqrt(sarima_std**2 + lstm_std**2)
+                    
+                    hybrid_lower = hybrid_pred - 1.96 * total_std
+                    hybrid_upper = hybrid_pred + 1.96 * total_std
+                    return hybrid_pred, hybrid_lower, hybrid_upper
+                
+                return hybrid_pred
+
+            except Exception as e:
+                logger.warning(f"LSTM prediction failed: {e}. Fallback to SARIMA.")
+                return (sarima_pred, sarima_lower, sarima_upper) if return_confidence else sarima_pred
+        
+        return (sarima_pred, sarima_lower, sarima_upper) if return_confidence else sarima_pred
 
     def save(self, filepath_base: str):
-        """
-        Save both models
-
-        Parameters:
-        -----------
-        filepath_base : str - Base path (without extension)
-        """
-        if not self.is_fitted:
-            raise ValueError("Cannot save unfitted model")
-
         self.sarima.save(f"{filepath_base}_sarima")
         if self.lstm.is_fitted:
             self.lstm.save(f"{filepath_base}_lstm")
 
-        logger.info(f"Hybrid model saved to {filepath_base}_*")
-
     @classmethod
     def load(cls, filepath_base: str):
-        """
-        Load both models
-
-        Parameters:
-        -----------
-        filepath_base : str - Base path (without extension)
-
-        Returns:
-        --------
-        HybridSARIMALSTM - Loaded model instance
-        """
         instance = cls()
         instance.sarima = SARIMAModel.load(f"{filepath_base}_sarima")
-
         try:
             instance.lstm = LSTMModel.load(f"{filepath_base}_lstm")
-        except FileNotFoundError:
-            logger.warning("LSTM model not found, using SARIMA only")
+        except:
             instance.lstm.is_fitted = False
-
         instance.is_fitted = True
-        logger.info(f"Hybrid model loaded from {filepath_base}_*")
         return instance
