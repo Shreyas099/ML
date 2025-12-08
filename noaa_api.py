@@ -29,13 +29,13 @@ class WeatherDataFetcher:
     def get_historical_observations(self, lat: float, lon: float, days: int = 365) -> tuple[pd.DataFrame, dict]:
         """
         Fetch historical weather observations from Open-Meteo
-        Open-Meteo provides extensive free historical data with no API key required
+        Combines forecast API (recent 16 days) with archive API (older data)
 
         Parameters:
         -----------
         lat : float - Latitude
         lon : float - Longitude
-        days : int - Number of days of historical data (default 365, max ~40 years)
+        days : int - Number of days of historical data (default 365)
 
         Returns:
         --------
@@ -46,6 +46,17 @@ class WeatherDataFetcher:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
 
+        # For recent data (last 16 days), use forecast API which includes past observations
+        recent_start = end_date - timedelta(days=min(16, days))
+
+        # For older data, use archive API
+        if days > 16:
+            archive_end = end_date - timedelta(days=16)
+            archive_start = start_date
+        else:
+            archive_end = None
+            archive_start = None
+
         metadata = {
             'source': 'unknown',
             'data_points': 0,
@@ -55,25 +66,29 @@ class WeatherDataFetcher:
         }
 
         try:
-            # Open-Meteo Historical Weather API
-            params = {
+            dfs = []
+
+            # 1. Get recent data from Forecast API (includes past 16 days + forecast)
+            logger.info(f"Fetching recent data from forecast API (last {min(16, days)} days)")
+            forecast_params = {
                 'latitude': lat,
                 'longitude': lon,
-                'start_date': start_date.strftime('%Y-%m-%d'),
-                'end_date': end_date.strftime('%Y-%m-%d'),
                 'hourly': 'temperature_2m,relative_humidity_2m,dew_point_2m,pressure_msl,wind_speed_10m,wind_direction_10m',
+                'past_days': min(16, days),
+                'forecast_days': 0,  # Don't need forecast, just past
                 'timezone': 'auto'
             }
 
-            response = self.session.get(self.OPENMETEO_URL, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
+            forecast_response = self.session.get('https://api.open-meteo.com/v1/forecast',
+                                                params=forecast_params, timeout=30)
+            forecast_response.raise_for_status()
+            forecast_data = forecast_response.json()
 
-            # Parse hourly data
-            hourly = data.get('hourly', {})
+            # Parse forecast API data
+            hourly = forecast_data.get('hourly', {})
             times = pd.to_datetime(hourly.get('time', []))
 
-            df = pd.DataFrame({
+            recent_df = pd.DataFrame({
                 'timestamp': times,
                 'temperature': hourly.get('temperature_2m', []),
                 'dewpoint': hourly.get('dew_point_2m', []),
@@ -83,11 +98,61 @@ class WeatherDataFetcher:
                 'relativeHumidity': hourly.get('relative_humidity_2m', [])
             })
 
-            if not df.empty:
-                df = df.set_index('timestamp')
+            if not recent_df.empty:
+                recent_df = recent_df.set_index('timestamp')
+                dfs.append(recent_df)
+                logger.info(f"Got {len(recent_df)} recent data points")
 
-                # Update metadata for real data
-                metadata['source'] = 'Open-Meteo API (real data)'
+            # 2. Get older data from Archive API if needed
+            if archive_start is not None and days > 16:
+                logger.info(f"Fetching archive data from {archive_start.strftime('%Y-%m-%d')} to {archive_end.strftime('%Y-%m-%d')}")
+                archive_params = {
+                    'latitude': lat,
+                    'longitude': lon,
+                    'start_date': archive_start.strftime('%Y-%m-%d'),
+                    'end_date': archive_end.strftime('%Y-%m-%d'),
+                    'hourly': 'temperature_2m,relative_humidity_2m,dew_point_2m,pressure_msl,wind_speed_10m,wind_direction_10m',
+                    'timezone': 'auto'
+                }
+
+                archive_response = self.session.get(self.OPENMETEO_URL, params=archive_params, timeout=30)
+                archive_response.raise_for_status()
+                archive_data = archive_response.json()
+
+                hourly = archive_data.get('hourly', {})
+                times = pd.to_datetime(hourly.get('time', []))
+
+                archive_df = pd.DataFrame({
+                    'timestamp': times,
+                    'temperature': hourly.get('temperature_2m', []),
+                    'dewpoint': hourly.get('dew_point_2m', []),
+                    'barometricPressure': hourly.get('pressure_msl', []),
+                    'windSpeed': hourly.get('wind_speed_10m', []),
+                    'windDirection': hourly.get('wind_direction_10m', []),
+                    'relativeHumidity': hourly.get('relative_humidity_2m', [])
+                })
+
+                if not archive_df.empty:
+                    archive_df = archive_df.set_index('timestamp')
+                    dfs.append(archive_df)
+                    logger.info(f"Got {len(archive_df)} archive data points")
+
+            # Combine dataframes
+            if dfs:
+                df = pd.concat(dfs).sort_index()
+                # Remove duplicates, keeping the most recent data (from forecast API)
+                df = df[~df.index.duplicated(keep='last')]
+
+                # Update metadata
+                sources_used = []
+                if len(dfs) == 2:
+                    sources_used = ["Forecast API (recent)", "Archive API (historical)"]
+                elif dfs and len(recent_df) > 0:
+                    sources_used = ["Forecast API (up-to-date)"]
+                else:
+                    sources_used = ["Archive API"]
+
+                metadata['source'] = f"Open-Meteo: {', '.join(sources_used)}"
                 metadata['data_points'] = len(df)
                 coverage = (df.index[-1] - df.index[0]).total_seconds() / 86400
                 metadata['coverage_days'] = round(coverage, 1)
@@ -100,7 +165,8 @@ class WeatherDataFetcher:
                 else:
                     metadata['quality'] = 'insufficient'
 
-                logger.info(f"Fetched {metadata['data_points']} data points from Open-Meteo ({metadata['coverage_days']} days)")
+                logger.info(f"Combined {metadata['data_points']} data points ({metadata['coverage_days']} days coverage)")
+                logger.info(f"Data range: {df.index[0]} to {df.index[-1]}")
                 return df, metadata
             else:
                 # Fallback to synthetic data
