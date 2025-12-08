@@ -348,7 +348,20 @@ def main():
                 return
 
             # Show data quality
-            st.info(f"✅ {metadata['source']} - {metadata['data_points']} points ({metadata['coverage_days']:.1f} days)")
+            last_data_point = historical_data['temperature'].iloc[-1]
+            last_data_time = historical_data.index[-1]
+
+            st.info(f"""
+            ✅ **Data Retrieved**: {metadata['source']}
+            - **Data points**: {metadata['data_points']} ({metadata['coverage_days']:.1f} days)
+            - **Last data point**: {last_data_point:.1f}°C at {last_data_time.strftime('%Y-%m-%d %H:%M')}
+            - **Time lag**: {(datetime.now() - last_data_time.replace(tzinfo=None)).total_seconds() / 3600:.1f} hours ago
+            """)
+
+            # Warning if data is stale
+            hours_old = (datetime.now() - last_data_time.replace(tzinfo=None)).total_seconds() / 3600
+            if hours_old > 3:
+                st.warning(f"⚠️ Historical data is {hours_old:.1f} hours old. Predictions may not reflect current conditions.")
 
             # Prepare temperature data
             if 'temperature' not in historical_data.columns:
