@@ -213,8 +213,9 @@ def main():
             status_text.text("Fetching historical weather data from Open-Meteo...")
             progress_bar.progress(20)
 
-            # Request 365 days of data (Open-Meteo can provide this!)
-            historical_data, data_metadata = fetcher.get_historical_observations(lat, lon, days=365)
+            # Request 90 days of data (good balance between data quality and training time)
+            # SARIMA struggles with very large datasets (1000+ points) - 90 days = ~2160 hourly points
+            historical_data, data_metadata = fetcher.get_historical_observations(lat, lon, days=90)
 
             if historical_data.empty:
                 st.error("❌ Failed to fetch data. Please try again.")
@@ -281,24 +282,34 @@ def main():
                 lstm_units=(lstm_units_1, lstm_units_2)
             )
             
-            # Train model
-            model.fit(
-                temp_data,
-                features_df,
-                lstm_epochs=lstm_epochs,
-                lstm_batch_size=32
-            )
+            # Train model with error handling
+            try:
+                model.fit(
+                    temp_data,
+                    features_df,
+                    lstm_epochs=lstm_epochs,
+                    lstm_batch_size=32
+                )
+            except Exception as e:
+                st.error(f"❌ Error training model: {str(e)}")
+                logger.exception("Model training failed")
+                return
             
             progress_bar.progress(80)
             status_text.text("Generating 7-day forecast...")
 
             # Generate 7-day forecast (168 hours) with confidence intervals
-            start_date = datetime.now()
-            # Note: future_features would need to be forecasted separately
-            # For now, pass None as we don't have future feature values
-            forecast, forecast_lower, forecast_upper = model.predict(
-                FORECAST_HOURS, pd.Timestamp(start_date), None, return_confidence=True
-            )
+            try:
+                start_date = datetime.now()
+                # Note: future_features would need to be forecasted separately
+                # For now, pass None as we don't have future feature values
+                forecast, forecast_lower, forecast_upper = model.predict(
+                    FORECAST_HOURS, pd.Timestamp(start_date), None, return_confidence=True
+                )
+            except Exception as e:
+                st.error(f"❌ Error generating forecast: {str(e)}")
+                logger.exception("Forecast generation failed")
+                return
 
             # Store in session state
             st.session_state.models[location_key] = model
