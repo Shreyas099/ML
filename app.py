@@ -41,7 +41,7 @@ st.markdown("""
 
 # Constants
 FORECAST_HOURS = 168  # 7 days
-DATA_DAYS = 14  # Use 14 days for fast training
+DATA_DAYS = 30  # Use 30 days for better accuracy
 
 
 @st.cache_resource
@@ -84,8 +84,8 @@ def train_and_forecast(temp_data, location_name):
 
         HybridModel = get_model_class()
         model = HybridModel(
-            sarima_order=(1, 0, 1),
-            sarima_seasonal_order=(1, 0, 1, 24),
+            sarima_order=(1, 1, 1),
+            sarima_seasonal_order=(1, 1, 1, 24),
             lstm_sequence_length=24,
             lstm_units=(32, 16)
         )

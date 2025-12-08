@@ -17,20 +17,20 @@ logger = logging.getLogger(__name__)
 class SARIMAModel:
     """Fast SARIMA model with fixed parameters - optimized for web applications"""
 
-    def __init__(self, order: Tuple[int, int, int] = (1, 0, 1),
-                 seasonal_order: Tuple[int, int, int, int] = (1, 0, 1, 24)):
+    def __init__(self, order: Tuple[int, int, int] = (1, 1, 1),
+                 seasonal_order: Tuple[int, int, int, int] = (1, 1, 1, 24)):
         """
-        Initialize SARIMA model with simple, fast parameters
+        Initialize SARIMA model with balanced parameters
 
         Default parameters are optimized for:
-        - Fast training (< 30 seconds)
+        - Accurate temperature forecasting
         - Hourly weather data with daily seasonality (period=24)
         - Good balance of accuracy and speed
 
         Parameters:
         -----------
-        order : (p, d, q) - ARIMA order (default: 1,0,1 - simple AR+MA)
-        seasonal_order : (P, D, Q, s) - Seasonal order (default: 1,0,1,24 - daily pattern)
+        order : (p, d, q) - ARIMA order (default: 1,1,1 - AR+I+MA with differencing)
+        seasonal_order : (P, D, Q, s) - Seasonal order (default: 1,1,1,24 - seasonal differencing)
         """
         self.order = order
         self.seasonal_order = seasonal_order
@@ -38,7 +38,7 @@ class SARIMAModel:
         self.is_fitted = False
         self.data_freq = None
 
-    def fit(self, data: pd.Series, max_iter: int = 100):
+    def fit(self, data: pd.Series, max_iter: int = 200):
         """
         Fit SARIMA model to data
 
