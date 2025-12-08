@@ -84,8 +84,11 @@ def train_and_forecast(temp_data, location_name):
 
         HybridModel = get_model_class()
         from lstm_model import LSTMModel
+        import pytz
 
-        start_date = pd.Timestamp(datetime.now())
+        # Use EST timezone
+        est = pytz.timezone('America/New_York')
+        start_date = pd.Timestamp(datetime.now(est))
 
         # 1. Train Hybrid Model (SARIMA + LSTM on residuals)
         status.text("Training Hybrid Model (SARIMA + LSTM on residuals)...")
@@ -120,8 +123,8 @@ def train_and_forecast(temp_data, location_name):
             lstm_forecast = lstm_standalone.predict_residuals(
                 temp_data, FORECAST_HOURS, return_std=False
             )
-            # Add proper datetime index
-            lstm_forecast.index = pd.date_range(start=start_date, periods=FORECAST_HOURS, freq='H')
+            # Add proper datetime index with timezone
+            lstm_forecast.index = pd.date_range(start=start_date, periods=FORECAST_HOURS, freq='H', tz=est)
         except Exception as e:
             logger.warning(f"Standalone LSTM failed: {e}")
             lstm_forecast = None
@@ -147,7 +150,8 @@ def train_and_forecast(temp_data, location_name):
         'hybrid_upper': hybrid_upper,
         'sarima_forecast': sarima_forecast,
         'lstm_forecast': lstm_forecast,
-        'historical': temp_data
+        'historical': temp_data,
+        'start_time': start_date.strftime('%Y-%m-%d %H:%M %Z')
     }
 
 
@@ -386,9 +390,9 @@ def main():
 
         with col1:
             st.metric(
-                "Forecast Horizon",
-                "7 Days",
-                f"{FORECAST_HOURS} hours"
+                "Forecast Start",
+                results['start_time'].split()[1],  # Time only
+                results['start_time'].split()[0]   # Date
             )
 
         with col2:
