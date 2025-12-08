@@ -174,13 +174,14 @@ def plot_comparison(results, location_name):
     forecast_times = hybrid_forecast.index
 
     # Plot 1: 3-Model Comparison
-    # SARIMA only
+    # SARIMA only (draw first)
     fig.add_trace(
         go.Scatter(
             x=forecast_times,
             y=sarima_forecast,
-            name='SARIMA Only',
-            line=dict(color='orange', width=2, dash='dash'),
+            name='🟧 SARIMA Only',
+            line=dict(color='#FF8C00', width=3, dash='dash'),  # Dark orange, thicker
+            mode='lines',
             legendgroup='models'
         ),
         row=1, col=1
@@ -192,20 +193,23 @@ def plot_comparison(results, location_name):
             go.Scatter(
                 x=forecast_times,
                 y=lstm_forecast,
-                name='LSTM Only',
-                line=dict(color='red', width=2, dash='dot'),
+                name='🔴 LSTM Only',
+                line=dict(color='#FF0000', width=3, dash='dot'),  # Bright red, thicker
+                mode='lines',
                 legendgroup='models'
             ),
             row=1, col=1
         )
 
-    # Hybrid (best)
+    # Hybrid (best) - draw last so it's on top
     fig.add_trace(
         go.Scatter(
             x=forecast_times,
             y=hybrid_forecast,
-            name='Hybrid (SARIMA+LSTM) ⭐',
-            line=dict(color='#2193b0', width=3),
+            name='🔵 Hybrid (Best) ⭐',
+            line=dict(color='#00CED1', width=4),  # Dark turquoise, thickest
+            mode='lines',
+            opacity=0.9,  # Slightly transparent to see lines behind
             legendgroup='models'
         ),
         row=1, col=1
@@ -411,10 +415,12 @@ def main():
 
         # Model comparison explanation
         st.info("""
-        💡 **3-Model Comparison**:
-        - 🟧 **SARIMA Only** (orange dashed): Good for trends/seasonality, misses non-linear patterns
-        - 🔴 **LSTM Only** (red dotted): Captures non-linear patterns, struggles with long-term trends
-        - 🔵 **Hybrid ⭐** (blue solid): **Best of both worlds** - combines SARIMA's trend capture with LSTM's non-linear corrections
+        💡 **3-Model Comparison** (see top chart):
+        - 🟧 **SARIMA Only** (orange dashed line): Captures trends & daily cycles, but misses non-linear patterns
+        - 🔴 **LSTM Only** (red dotted line): Learns non-linear patterns, but drifts away from realistic trends
+        - 🔵 **Hybrid ⭐** (turquoise solid line): **Best performance** - combines SARIMA's stability with LSTM's adaptability
+
+        **Notice**: The hybrid line stays close to SARIMA's daily patterns while correcting its weaknesses, unlike LSTM which diverges completely!
         """)
 
         # Temperature validation
