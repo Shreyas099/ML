@@ -41,7 +41,7 @@ st.markdown("""
 
 # Constants
 FORECAST_HOURS = 168  # 7 days
-DATA_DAYS = 30  # Use 30 days for better accuracy
+DATA_DAYS = 60  # Use 60 days for better seasonal understanding
 
 
 @st.cache_resource
@@ -72,95 +72,139 @@ def get_location_coordinates(fetcher, location_name):
 
 
 def train_and_forecast(temp_data, location_name):
-    """Train model and generate forecast"""
+    """Train all three models for comparison"""
 
-    with st.spinner("🔄 Training hybrid SARIMA-LSTM model..."):
+    with st.spinner("🔄 Training all models for comparison..."):
         progress = st.progress(0)
         status = st.empty()
 
-        # Initialize model with optimized parameters
-        status.text("Initializing model...")
-        progress.progress(10)
+        # Import model classes
+        status.text("Initializing models...")
+        progress.progress(5)
 
         HybridModel = get_model_class()
-        model = HybridModel(
+        from lstm_model import LSTMModel
+
+        start_date = pd.Timestamp(datetime.now())
+
+        # 1. Train Hybrid Model (SARIMA + LSTM on residuals)
+        status.text("Training Hybrid Model (SARIMA + LSTM on residuals)...")
+        progress.progress(15)
+
+        hybrid_model = HybridModel(
             sarima_order=(1, 1, 1),
             sarima_seasonal_order=(1, 1, 1, 24),
             lstm_sequence_length=24,
             lstm_units=(32, 16)
         )
+        hybrid_model.fit(temp_data, lstm_epochs=30, lstm_batch_size=32)
 
-        # Train model
-        status.text("Training SARIMA + LSTM...")
-        progress.progress(30)
-
-        model.fit(temp_data, lstm_epochs=30, lstm_batch_size=32)
-        progress.progress(80)
-
-        # Generate forecast
-        status.text("Generating 7-day forecast...")
-        start_date = pd.Timestamp(datetime.now())
-
-        forecast, lower, upper = model.predict(
-            FORECAST_HOURS,
-            start_date,
-            return_confidence=True
+        hybrid_forecast, hybrid_lower, hybrid_upper = hybrid_model.predict(
+            FORECAST_HOURS, start_date, return_confidence=True
         )
+        progress.progress(50)
 
-        # Get component predictions for comparison
-        components = model.get_component_predictions(FORECAST_HOURS, start_date)
+        # 2. Get SARIMA-only predictions
+        status.text("Getting SARIMA-only predictions...")
+        sarima_forecast = hybrid_model.sarima.predict(FORECAST_HOURS, start_date, return_confidence=False)
+        progress.progress(65)
+
+        # 3. Train standalone LSTM on raw temperature data
+        status.text("Training standalone LSTM on temperature data...")
+        lstm_standalone = LSTMModel(sequence_length=24, lstm_units=(32, 16))
+
+        try:
+            lstm_standalone.fit(temp_data, epochs=30, batch_size=32)
+
+            # Generate LSTM-only forecast
+            lstm_forecast = lstm_standalone.predict_residuals(
+                temp_data, FORECAST_HOURS, return_std=False
+            )
+            # Add proper datetime index
+            lstm_forecast.index = pd.date_range(start=start_date, periods=FORECAST_HOURS, freq='H')
+        except Exception as e:
+            logger.warning(f"Standalone LSTM failed: {e}")
+            lstm_forecast = None
+
+        progress.progress(90)
+
+        # Validate predictions are reasonable
+        status.text("Validating predictions...")
+        current_temp = temp_data.iloc[-1]
+
+        # Check if predictions are within reasonable range
+        if abs(hybrid_forecast.mean() - current_temp) > 30:
+            st.warning(f"⚠️ Predictions may be less accurate. Current temp: {current_temp:.1f}°C, "
+                      f"Forecast avg: {hybrid_forecast.mean():.1f}°C")
 
         progress.progress(100)
         status.text("✅ Complete!")
 
     return {
-        'model': model,
-        'forecast': forecast,
-        'lower': lower,
-        'upper': upper,
-        'components': components,
+        'hybrid_model': hybrid_model,
+        'hybrid_forecast': hybrid_forecast,
+        'hybrid_lower': hybrid_lower,
+        'hybrid_upper': hybrid_upper,
+        'sarima_forecast': sarima_forecast,
+        'lstm_forecast': lstm_forecast,
         'historical': temp_data
     }
 
 
 def plot_comparison(results, location_name):
-    """Plot model comparison to demonstrate hybrid superiority"""
+    """Plot 3-model comparison to demonstrate hybrid superiority"""
 
-    components = results['components']
     historical = results['historical']
+    sarima_forecast = results['sarima_forecast']
+    lstm_forecast = results['lstm_forecast']
+    hybrid_forecast = results['hybrid_forecast']
 
     # Create subplots
     fig = make_subplots(
         rows=2, cols=1,
         subplot_titles=(
-            "📊 Model Comparison: SARIMA vs Hybrid SARIMA-LSTM",
+            "📊 3-Model Comparison: SARIMA vs LSTM vs Hybrid",
             "📈 Full Forecast with Confidence Intervals"
         ),
         vertical_spacing=0.15,
-        row_heights=[0.4, 0.6]
+        row_heights=[0.5, 0.5]
     )
 
     # Forecast times
-    forecast_times = components['hybrid'].index
+    forecast_times = hybrid_forecast.index
 
-    # Plot 1: Comparison (SARIMA vs Hybrid)
-    if 'sarima' in components:
+    # Plot 1: 3-Model Comparison
+    # SARIMA only
+    fig.add_trace(
+        go.Scatter(
+            x=forecast_times,
+            y=sarima_forecast,
+            name='SARIMA Only',
+            line=dict(color='orange', width=2, dash='dash'),
+            legendgroup='models'
+        ),
+        row=1, col=1
+    )
+
+    # LSTM only (if available)
+    if lstm_forecast is not None:
         fig.add_trace(
             go.Scatter(
                 x=forecast_times,
-                y=components['sarima'],
-                name='SARIMA Only',
-                line=dict(color='orange', width=2, dash='dash'),
+                y=lstm_forecast,
+                name='LSTM Only',
+                line=dict(color='red', width=2, dash='dot'),
                 legendgroup='models'
             ),
             row=1, col=1
         )
 
+    # Hybrid (best)
     fig.add_trace(
         go.Scatter(
             x=forecast_times,
-            y=components['hybrid'],
-            name='Hybrid (SARIMA+LSTM)',
+            y=hybrid_forecast,
+            name='Hybrid (SARIMA+LSTM) ⭐',
             line=dict(color='#2193b0', width=3),
             legendgroup='models'
         ),
@@ -185,7 +229,7 @@ def plot_comparison(results, location_name):
     fig.add_trace(
         go.Scatter(
             x=forecast_times,
-            y=results['forecast'],
+            y=hybrid_forecast,
             name='Hybrid Forecast',
             line=dict(color='#2193b0', width=3),
             legendgroup='data'
@@ -197,7 +241,7 @@ def plot_comparison(results, location_name):
     fig.add_trace(
         go.Scatter(
             x=list(forecast_times) + list(forecast_times[::-1]),
-            y=list(results['upper']) + list(results['lower'][::-1]),
+            y=list(results['hybrid_upper']) + list(results['hybrid_lower'][::-1]),
             fill='toself',
             fillcolor='rgba(33, 147, 176, 0.2)',
             line=dict(color='rgba(255,255,255,0)'),
@@ -332,9 +376,9 @@ def main():
         st.plotly_chart(fig, use_container_width=True)
 
         # Show statistics
-        st.header("📊 Model Performance")
+        st.header("📊 Model Performance Comparison")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             st.metric(
@@ -344,26 +388,41 @@ def main():
             )
 
         with col2:
-            avg_temp = results['forecast'].mean()
+            current_temp = results['historical'].iloc[-1]
             st.metric(
-                "Avg Forecast Temp",
-                f"{avg_temp:.1f}°C",
-                f"±{(results['upper'] - results['lower']).mean():.1f}°C"
+                "Current Temp",
+                f"{current_temp:.1f}°C",
+                "Last observation"
             )
 
         with col3:
-            if results['model'].lstm.is_fitted:
-                st.metric("Model Status", "Hybrid", "SARIMA + LSTM")
-            else:
-                st.metric("Model Status", "SARIMA Only", "LSTM failed")
+            avg_temp = results['hybrid_forecast'].mean()
+            st.metric(
+                "Hybrid Avg",
+                f"{avg_temp:.1f}°C",
+                f"±{(results['hybrid_upper'] - results['hybrid_lower']).mean():.1f}°C"
+            )
 
-        # Key insight
+        with col4:
+            models_trained = "3 Models"
+            if results['lstm_forecast'] is None:
+                models_trained = "2 Models"
+            st.metric("Models Trained", models_trained, "SARIMA, LSTM, Hybrid")
+
+        # Model comparison explanation
         st.info("""
-        💡 **Key Insight**: The hybrid model (blue line) combines the strengths of both approaches:
-        - SARIMA captures the overall trend and daily patterns
-        - LSTM adds corrections for non-linear weather dynamics
-        - Result: More accurate and reliable forecasts!
+        💡 **3-Model Comparison**:
+        - 🟧 **SARIMA Only** (orange dashed): Good for trends/seasonality, misses non-linear patterns
+        - 🔴 **LSTM Only** (red dotted): Captures non-linear patterns, struggles with long-term trends
+        - 🔵 **Hybrid ⭐** (blue solid): **Best of both worlds** - combines SARIMA's trend capture with LSTM's non-linear corrections
         """)
+
+        # Temperature validation
+        temp_diff = abs(avg_temp - current_temp)
+        if temp_diff < 10:
+            st.success(f"✅ Predictions look realistic (within {temp_diff:.1f}°C of current temperature)")
+        else:
+            st.warning(f"⚠️ Large temperature change predicted ({temp_diff:.1f}°C difference from current)")
 
 
 if __name__ == "__main__":
