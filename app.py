@@ -138,21 +138,29 @@ def main():
                 help="e.g., New York, NY or London, UK"
             )
             lat, lon = None, None
-            
+
             if location_name:
-                fetcher = get_fetcher()
-                if fetcher is None:
-                    st.error("Unable to initialize data fetcher")
-                    st.stop()
-                with st.spinner("Finding location..."):
-                    coords = fetcher.get_location_data(location_name)
-                    if coords:
-                        lat, lon = coords
-                        st.success(f"📍 {location_name}")
-                        st.info(f"Lat: {lat:.4f}, Lon: {lon:.4f}")
-                    else:
-                        st.error("Location not found. Please try again.")
+                # Cache location lookups to avoid repeated API calls on every rerun
+                cache_key = f"location_{location_name}"
+
+                if cache_key not in st.session_state:
+                    fetcher = get_fetcher()
+                    if fetcher is None:
+                        st.error("Unable to initialize data fetcher")
                         st.stop()
+                    with st.spinner("Finding location..."):
+                        coords = fetcher.get_location_data(location_name)
+                        if coords:
+                            st.session_state[cache_key] = coords
+                        else:
+                            st.error("Location not found. Please try again.")
+                            st.stop()
+
+                # Retrieve from cache
+                if cache_key in st.session_state:
+                    lat, lon = st.session_state[cache_key]
+                    st.success(f"📍 {location_name}")
+                    st.info(f"Lat: {lat:.4f}, Lon: {lon:.4f}")
         else:
             # Input validation for coordinates
             lat = st.number_input("Latitude", value=40.7128, min_value=-90.0, max_value=90.0, format="%.4f")
