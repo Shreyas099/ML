@@ -1,6 +1,7 @@
 """
 Hybrid SARIMA-LSTM Weather Forecasting App
 Demonstrates superior performance of hybrid statistical-deep learning approach
+with multivariate feature support.
 """
 import streamlit as st
 import pandas as pd
@@ -9,6 +10,7 @@ import logging
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime
+import pytz
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -71,8 +73,15 @@ def get_location_coordinates(fetcher, location_name):
     return coords
 
 
-def train_and_forecast(temp_data, location_name):
-    """Train all three models for comparison"""
+def train_and_forecast(data, location_name):
+    """
+    Train all three models for comparison using multivariate data
+    
+    Parameters:
+    -----------
+    data : pd.DataFrame - DataFrame containing 'temperature' and other features
+    location_name : str - Name of location for display
+    """
 
     with st.spinner("🔄 Training all models for comparison..."):
         progress = st.progress(0)
@@ -84,14 +93,29 @@ def train_and_forecast(temp_data, location_name):
 
         HybridModel = get_model_class()
         from lstm_model import LSTMModel
-        import pytz
 
-        # Use EST timezone
+        # Use EST timezone for display
         est = pytz.timezone('America/New_York')
         start_date = pd.Timestamp(datetime.now(est))
 
+        # Prepare Target and Features
+        target_series = data['temperature']
+        
+        # Select available features for multivariate training
+        potential_features = ['relativeHumidity', 'dewpoint', 'barometricPressure', 'windSpeed', 'windDirection']
+        available_features = [col for col in potential_features if col in data.columns]
+        
+        if available_features:
+            features_df = data[available_features]
+            feature_msg = f"with features: {', '.join(available_features)}"
+        else:
+            features_df = None
+            feature_msg = "(univariate)"
+
+        logger.info(f"Training with features: {available_features}")
+
         # 1. Train Hybrid Model (SARIMA + LSTM on residuals)
-        status.text("Training Hybrid Model (SARIMA + LSTM on residuals)...")
+        status.text(f"Training Hybrid Model {feature_msg}...")
         progress.progress(15)
 
         hybrid_model = HybridModel(
@@ -100,14 +124,21 @@ def train_and_forecast(temp_data, location_name):
             lstm_sequence_length=24,
             lstm_units=(32, 16)
         )
-        hybrid_model.fit(temp_data, lstm_epochs=30, lstm_batch_size=32)
+        
+        # Pass features to hybrid fit
+        hybrid_model.fit(
+            target_series, 
+            features=features_df,
+            lstm_epochs=30, 
+            lstm_batch_size=32
+        )
 
         hybrid_forecast, hybrid_lower, hybrid_upper = hybrid_model.predict(
             FORECAST_HOURS, start_date, return_confidence=True
         )
         progress.progress(50)
 
-        # 2. Get SARIMA-only predictions
+        # 2. Get SARIMA-only predictions (extracted from hybrid)
         status.text("Getting SARIMA-only predictions...")
         sarima_forecast = hybrid_model.sarima.predict(FORECAST_HOURS, start_date, return_confidence=False)
         progress.progress(65)
@@ -117,11 +148,18 @@ def train_and_forecast(temp_data, location_name):
         lstm_standalone = LSTMModel(sequence_length=24, lstm_units=(32, 16))
 
         try:
-            lstm_standalone.fit(temp_data, epochs=30, batch_size=32)
+            # Train standalone LSTM with features as well for fair comparison
+            lstm_standalone.fit(
+                target_series, 
+                features=features_df,
+                epochs=30, 
+                batch_size=32
+            )
 
             # Generate LSTM-only forecast
+            # Note: predict_residuals is named generically, can be used for raw data too
             lstm_forecast = lstm_standalone.predict_residuals(
-                temp_data, FORECAST_HOURS, return_std=False
+                target_series, FORECAST_HOURS, return_std=False
             )
             # Add proper datetime index with timezone
             lstm_forecast.index = pd.date_range(start=start_date, periods=FORECAST_HOURS, freq='H', tz=est)
@@ -133,7 +171,7 @@ def train_and_forecast(temp_data, location_name):
 
         # Validate predictions are reasonable
         status.text("Validating predictions...")
-        current_temp = temp_data.iloc[-1]
+        current_temp = target_series.iloc[-1]
 
         # Check if predictions are within reasonable range
         if abs(hybrid_forecast.mean() - current_temp) > 30:
@@ -150,7 +188,7 @@ def train_and_forecast(temp_data, location_name):
         'hybrid_upper': hybrid_upper,
         'sarima_forecast': sarima_forecast,
         'lstm_forecast': lstm_forecast,
-        'historical': temp_data,
+        'historical': target_series, # Return series for plotting
         'start_time': start_date.strftime('%Y-%m-%d %H:%M %Z')
     }
 
@@ -348,6 +386,10 @@ def main():
                 return
 
             # Show data quality
+            if 'temperature' not in historical_data.columns:
+                st.error("❌ Temperature data not available")
+                return
+
             last_data_point = historical_data['temperature'].iloc[-1]
             last_data_time = historical_data.index[-1]
 
@@ -363,18 +405,18 @@ def main():
             if hours_old > 3:
                 st.warning(f"⚠️ Historical data is {hours_old:.1f} hours old. Predictions may not reflect current conditions.")
 
-            # Prepare temperature data
-            if 'temperature' not in historical_data.columns:
-                st.error("❌ Temperature data not available")
-                return
+            # Prepare data: Drop rows where temperature is missing
+            clean_data = historical_data.dropna(subset=['temperature'])
+            
+            # Simple imputation for features if necessary (forward fill then backward fill)
+            # This ensures we don't drop rows just because a wind speed reading is missing
+            clean_data = clean_data.fillna(method='ffill').fillna(method='bfill')
 
-            temp_data = historical_data['temperature'].dropna()
+            if len(clean_data) < 100:
+                st.warning(f"⚠️ Limited data ({len(clean_data)} points). Results may be less accurate.")
 
-            if len(temp_data) < 100:
-                st.warning(f"⚠️ Limited data ({len(temp_data)} points). Results may be less accurate.")
-
-            # Train and forecast
-            results = train_and_forecast(temp_data, location_name)
+            # Train and forecast with FULL data (columns + features)
+            results = train_and_forecast(clean_data, location_name)
 
             # Store in session state
             st.session_state['results'] = results
