@@ -43,7 +43,7 @@ st.markdown("""
 
 # Constants
 FORECAST_HOURS = 168  # 7 days
-DATA_DAYS = 365  # Use 60 days for better seasonal understanding
+DATA_DAYS = 180  # Use 60 days for better seasonal understanding
 
 
 @st.cache_resource
