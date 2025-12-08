@@ -23,8 +23,8 @@ class HybridSARIMALSTM:
     """
 
     def __init__(self,
-                 sarima_order: Tuple[int, int, int] = (1, 0, 1),
-                 sarima_seasonal_order: Tuple[int, int, int, int] = (1, 0, 1, 24),
+                 sarima_order: Tuple[int, int, int] = (1, 1, 1),
+                 sarima_seasonal_order: Tuple[int, int, int, int] = (1, 1, 1, 24),
                  lstm_sequence_length: int = 24,
                  lstm_units: Tuple[int, int] = (32, 16)):
         """
