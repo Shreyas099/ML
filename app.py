@@ -213,9 +213,10 @@ def main():
             status_text.text("Fetching historical weather data from Open-Meteo...")
             progress_bar.progress(20)
 
-            # Request 90 days of data (good balance between data quality and training time)
-            # SARIMA struggles with very large datasets (1000+ points) - 90 days = ~2160 hourly points
-            historical_data, data_metadata = fetcher.get_historical_observations(lat, lon, days=90)
+            # Request 30 days of data (optimal for SARIMA with seasonal period 24)
+            # SARIMA with seasonal_period=24 needs ~720-1000 points for good performance
+            # 30 days = ~720 hourly points - fast training (<1 min), still captures patterns
+            historical_data, data_metadata = fetcher.get_historical_observations(lat, lon, days=30)
 
             if historical_data.empty:
                 st.error("❌ Failed to fetch data. Please try again.")
