@@ -177,6 +177,7 @@ class WeatherDataFetcher:
     def get_location_data(self, location_name: str) -> Optional[Tuple[float, float]]:
         """Get coordinates for a location name using Open-Meteo Geocoding API"""
         try:
+            # Try the full location name first
             params = {
                 'name': location_name,
                 'count': 1,
@@ -189,12 +190,26 @@ class WeatherDataFetcher:
             data = response.json()
 
             results = data.get('results', [])
+
+            # If no results and location has comma (e.g., "New York, NY"), try just the city name
+            if not results and ',' in location_name:
+                city_only = location_name.split(',')[0].strip()
+                logger.info(f"No results for '{location_name}', trying '{city_only}'")
+                params['name'] = city_only
+                response = self.session.get(self.GEOCODING_URL, params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                results = data.get('results', [])
+
             if results:
                 location = results[0]
                 lat = location.get('latitude')
                 lon = location.get('longitude')
                 name = location.get('name', location_name)
-                logger.info(f"Found location: {name} at ({lat}, {lon})")
+                country = location.get('country', '')
+                admin1 = location.get('admin1', '')
+                full_name = f"{name}, {admin1}, {country}" if admin1 and country else name
+                logger.info(f"Found location: {full_name} at ({lat}, {lon})")
                 return (lat, lon)
             else:
                 logger.warning(f"No location found for: {location_name}")
